@@ -1,7 +1,7 @@
 # The Eye - Vision Capture Tool
 
 **Version:** 0.2.2  
-**Last Updated:** January 2026  
+**Last Updated:** March 2026  
 **Developer:** Kartik (NullVoider)
 
 ---
@@ -26,6 +26,7 @@
 8. [Command Reference](#command-reference)
    - [Server Commands](#server-commands)
    - [Agent Commands](#agent-commands)
+   - [Snapshot Commands](#snapshot-commands)
    - [Utility Commands](#utility-commands)
 9. [Configuration](#configuration)
 10. [Advanced Features](#advanced-features)
@@ -65,6 +66,8 @@ The Eye consists of two main components:
 - ✅ **Dynamic Configuration**: Real-time agent configuration updates
 - ✅ **Auto-Stop Modes**: Duration-based and frame-count-based auto-stop
 - ✅ **Memory-Efficient**: Circular buffer storage with configurable capacity
+- ✅ **1:1 Agent Enforcement**: Server accepts exactly one agent at a time — a second connection is rejected with 409 until the first disconnects
+- ✅ **Frame Download**: Download individual frames or time-range archives directly from the ring buffer
 - ✅ **Token Authentication**: Secure server-agent communication
 - ✅ **RESTful API**: Easy integration with other tools
 - ✅ **Python SDK**: Programmatic access to server functionality
@@ -83,22 +86,30 @@ The Eye Server is a lightweight, high-performance Rust application that manages 
 #### Core Functions
 
 - **Frame Reception**: Accepts uploaded frames via HTTP POST
-- **In-Memory Storage**: Circular buffer storage (configurable, default 100 frames)
+- **In-Memory Storage**: Circular buffer storage (configurable via `EYE_MAX_FRAMES`, default 100 frames)
 - **Latest Frame Serving**: Provides instant access to the most recent capture
+- **Frame History**: Retrieve any frame by ID or download a time-range archive as a zip
+- **1:1 Connection Enforcement**: Accepts exactly one agent at a time; a second `POST /connect` is rejected with 409 until the first agent disconnects
+- **Format Preservation**: Stores and serves the actual image format sent by the agent — no hardcoded PNG assumption
 - **Health Monitoring**: Built-in health check endpoint
 - **Command & Control**: Dynamic agent configuration via response piggybacking
 - **Authentication**: Bearer token authentication for secure access
-- **Debug Information**: Runtime metrics and statistics
+- **Debug Information**: Runtime metrics and statistics including connection state
 
 #### Server Endpoints
 
 | Endpoint | Method | Description |
 |----------|--------|-------------|
 | `/health` | GET | Server health status and metrics |
-| `/upload` | POST | Upload captured frames |
+| `/connect` | POST | Register the agent and claim the single connection slot |
+| `/disconnect` | POST | Release the connection slot on clean shutdown |
+| `/upload` | POST | Upload captured frames (requires prior `/connect`) |
 | `/snapshot.png` | GET | Retrieve latest captured frame |
+| `/frames` | GET | List all frames in the ring buffer (metadata only) |
+| `/frames/:id` | GET | Download a specific frame by ID |
+| `/frames/range` | GET | Download all frames in a time window as a zip archive |
 | `/admin/config` | POST | Update global agent configuration |
-| `/debug` | GET | Server debug information |
+| `/debug` | GET | Server debug information including `agent_connected` state |
 
 #### Configuration Management
 
@@ -216,24 +227,25 @@ Send real-time notifications for:
 ```
 ┌─────────────────┐
 │   Eye Server    │
-│   (Rust Binary)   │
+│   (Rust Binary) │
 │                 │
 │  - HTTP Server  │
 │  - Memory Store │
 │  - Config Mgmt  │
+│  - 1:1 Enforce  │
 └────────┬────────┘
          │
          │ HTTP/REST
+         │ (one agent at a time)
          │
     ┌────┴────┐
     │         │
-┌───▼───┐ ┌──▼────┐
-│Agent 1│ │Agent 2│
-│(Python│ │(Python│
-└───────┘ └───────┘
-    │         │
-    │         │
-┌───▼─────────▼───┐
+┌───▼───┐  (rejected
+│ Agent │   with 409)
+│(Python│
+└───▼───┘
+    │
+┌───▼─────────────┐
 │  Screen Capture │
 │   - mss         │
 │   - screencap   │
@@ -243,12 +255,14 @@ Send real-time notifications for:
 
 #### Data Flow
 
-1. **Capture**: Agent captures screen using platform-specific method
-2. **Encode**: Image encoded in configured format (PNG/JPEG/etc.)
-3. **Upload**: Frame uploaded via HTTP POST to server
-4. **Store**: Server stores in circular buffer (latest N frames)
-5. **Config Update**: Server responds with configuration updates
-6. **Apply**: Agent applies new configuration for next capture
+1. **Connect**: Agent calls `POST /connect` to claim the single connection slot; server rejects a second agent with 409
+2. **Capture**: Agent captures screen using platform-specific method
+3. **Encode**: Image encoded in configured format (PNG/JPEG/etc.) — format is sent to server and preserved
+4. **Upload**: Frame uploaded via HTTP POST to server
+5. **Store**: Server stores in circular buffer (latest N frames, configurable via `EYE_MAX_FRAMES`)
+6. **Config Update**: Server responds with configuration updates
+7. **Apply**: Agent applies new configuration for next capture
+8. **Disconnect**: Agent calls `POST /disconnect` on clean shutdown to release the connection slot
 
 ### Performance Metrics
 
@@ -270,9 +284,10 @@ Send real-time notifications for:
 
 #### Scalability
 
-- **Agents per Server**: 10-50 (depends on hardware)
+- **Agents per Server**: 1 (1:1 enforcement — a second agent is rejected with 409 until the first disconnects)
 - **Max Frame Rate**: 0.1s interval (10 FPS)
 - **Storage Modes**: Memory, Disk, Hybrid
+- **Ring Buffer Size**: Configurable via `EYE_MAX_FRAMES` environment variable (default: 100)
 
 ---
 
@@ -478,6 +493,87 @@ eye agent start --server http://localhost:8080 --duration 300
 eye agent start --server http://localhost:8080 --interval 0.5 --max-frames 50
 ```
 
+### Snapshot Commands
+
+Download frames directly from the server's ring buffer without interrupting the live stream.
+
+#### Download Latest Frame
+
+```bash
+eye snapshot download [OPTIONS]
+```
+
+**Options**:
+- `--server <URL>`: Server URL (default: http://localhost:8080)
+- `--token <TOKEN>`: Authentication token
+- `--output, -o <PATH>`: Directory or file path to save to (default: current directory)
+
+The filename is derived from the capture timestamp, e.g. `frame_2026-03-01T14-32-10.123Z.png`. The file extension matches the actual format the agent is streaming.
+
+```bash
+eye snapshot download -o ~/screenshots
+```
+
+#### List Frames in Buffer
+
+```bash
+eye snapshot list [OPTIONS]
+```
+
+Prints a table of every frame currently held in the ring buffer, showing ID, timestamp, size, and format.
+
+```bash
+eye snapshot list
+#   ID  Timestamp                           Size  Format
+#  ────  ──────────────────────────────────  ─────  ──────
+#     0  2026-03-01T13:01:31+00:00            338K  png
+#     1  2026-03-01T13:01:32+00:00            338K  png
+```
+
+#### Fetch a Specific Frame
+
+```bash
+eye snapshot fetch --id <N> [OPTIONS]
+```
+
+**Required**:
+- `--id <N>`: Frame ID (use `eye snapshot list` to find available IDs)
+
+**Options**:
+- `--server <URL>`: Server URL (default: http://localhost:8080)
+- `--token <TOKEN>`: Authentication token
+- `--output, -o <PATH>`: Directory or file path to save to
+
+```bash
+eye snapshot fetch --id 42 -o ~/screenshots
+```
+
+#### Download a Time Range
+
+```bash
+eye snapshot range --from "<datetime>" --to "<datetime>" [OPTIONS]
+```
+
+Downloads all frames captured within a time window as a zip archive, automatically extracted into the output directory.
+
+**Required**:
+- `--from <datetime>`: Start of range (e.g. `"2026-03-01 14:30:00"`)
+- `--to <datetime>`: End of range (e.g. `"2026-03-01 14:35:00"`)
+
+**Options**:
+- `--server <URL>`: Server URL (default: http://localhost:8080)
+- `--token <TOKEN>`: Authentication token
+- `--output, -o <PATH>`: Directory to extract frames into (default: current directory)
+
+**Accepted datetime formats**: `YYYY-MM-DD HH:MM:SS`, `YYYY-MM-DD HH:MM`, `YYYY-MM-DD`
+
+```bash
+eye snapshot range \
+  --from "2026-03-01 14:30:00" \
+  --to   "2026-03-01 14:35:00" \
+  -o ~/frames
+```
+
 ### Utility Commands
 
 #### Debug Information
@@ -547,6 +643,7 @@ Set via environment variables:
 ```bash
 export EYE_PORT=8080
 export EYE_AUTH_TOKEN=your-secret-token
+export EYE_MAX_FRAMES=200        # ring buffer capacity (default: 100)
 ```
 
 ### Agent Configuration
@@ -809,18 +906,46 @@ Check server health.
 }
 ```
 
-#### POST /upload
+#### POST /connect
 
-Upload a captured frame.
+Register the agent and claim the single connection slot. Must be called before `/upload`. Returns 409 if another agent is already connected.
 
 **Headers**:
 - `Authorization: Bearer <token>` (if auth enabled)
-- `Content-Type: image/png` or `multipart/form-data`
-- `X-Frame-ID: <id>` (for raw upload)
+
+**Response** (200):
+```json
+{ "status": "connected" }
+```
+
+**Response** (409 — slot occupied):
+```json
+{ "error": "An agent is already connected" }
+```
+
+#### POST /disconnect
+
+Release the connection slot on clean shutdown, allowing a new agent to connect.
+
+**Headers**:
+- `Authorization: Bearer <token>` (if auth enabled)
+
+**Response**:
+```json
+{ "status": "disconnected" }
+```
+
+#### POST /upload
+
+Upload a captured frame. Requires a prior `POST /connect`.
+
+**Headers**:
+- `Authorization: Bearer <token>` (if auth enabled)
 
 **Form Data** (multipart):
-- `image`: Image file
-- `frame_id`: Frame identifier
+- `image`: Image file bytes
+- `frame_id`: Frame identifier (integer)
+- `format`: Image format string — `png`, `jpeg`, `webp`, etc. Stored in frame metadata and used for correct `Content-Type` on download
 
 **Response**:
 ```json
@@ -838,12 +963,62 @@ Upload a captured frame.
 
 #### GET /snapshot.png
 
-Retrieve the latest captured frame.
+Retrieve the latest captured frame as raw bytes. Content-Type reflects the actual format sent by the agent (not hardcoded to `image/png`).
 
-**Headers** (response):
+**Response Headers**:
+- `Content-Type`: Actual image format (e.g. `image/png`, `image/jpeg`)
 - `X-Frame-ID`: Frame identifier
+- `X-Frame-Timestamp`: Capture timestamp (RFC 3339)
 
 **Response**: Binary image data
+
+#### GET /frames
+
+List all frames currently in the ring buffer. Returns metadata only — no image data.
+
+**Response**:
+```json
+{
+  "count": 3,
+  "frames": [
+    {
+      "id": 0,
+      "timestamp": "2026-03-01T13:01:31+00:00",
+      "timestamp_unix": 1740833691,
+      "size_bytes": 345977,
+      "size_kb": 337.9,
+      "format": "png"
+    }
+  ]
+}
+```
+
+#### GET /frames/:id
+
+Download a specific frame by its ID.
+
+**Response Headers**:
+- `Content-Type`: Actual image format
+- `Content-Disposition`: `attachment; filename="frame_2026-03-01T13-01-31.000Z.png"`
+- `X-Frame-ID`: Frame identifier
+- `X-Frame-Timestamp`: Capture timestamp (RFC 3339)
+
+**Response**: Binary image data. Returns 404 if the frame ID is not in the buffer.
+
+#### GET /frames/range
+
+Download all frames within a Unix timestamp window as a zip archive.
+
+**Query Parameters**:
+- `from`: Start of range (Unix timestamp, seconds)
+- `to`: End of range (Unix timestamp, seconds)
+
+**Response Headers**:
+- `Content-Type`: `application/zip`
+- `Content-Disposition`: `attachment; filename="frames_<from>_<to>.zip"`
+- `X-Frame-Count`: Number of frames in the archive
+
+**Response**: Zip archive containing one image file per frame, each named by capture timestamp and format extension. Returns 404 if no frames exist in the window.
 
 #### POST /admin/config
 
@@ -882,6 +1057,7 @@ Get server debug information.
 {
   "uptime_sec": 3600.5,
   "total_frames": 240,
+  "agent_connected": true,
   "current_config": {
     "interval": 1.5,
     "format": "png",
@@ -987,6 +1163,26 @@ export MEDIATOR_URL=http://your-server:8080
 eye agent start --server http://your-server:8080
 ```
 
+**Problem**: Agent rejected with HTTP 409 on startup
+
+**Cause**: Another agent is already registered with the server. The server enforces a 1:1 connection — only one agent may be connected at a time.
+
+**Solution**:
+```bash
+# Check if an agent is currently connected
+curl http://localhost:8080/debug | grep agent_connected
+
+# If the previous agent crashed without disconnecting, restart the server
+# to reset the connection slot. The slot is also released automatically
+# when a new tag/release is deployed and eye-server restarts.
+```
+
+**Problem**: `eye update` fails with `[Errno 26] Text file busy`
+
+**Cause**: On Linux/macOS, you cannot overwrite a running executable directly. This was a bug in versions prior to 0.2.2.
+
+**Solution**: Update to 0.2.2 or later. The update command now uses an atomic rename strategy — the new binary is written to a sibling `.new` temp file and then renamed over the old one in a single syscall, so the running process is never interrupted and the old binary is never deleted before the new one is in place.
+
 **Problem**: Screen capture fails on Linux Wayland
 
 **Solution**:
@@ -1062,7 +1258,7 @@ setup_logging(level="DEBUG", log_file=Path("/tmp/eye.log"))
 
 ---
 
-**Last Updated:** January 28, 2026  
+**Last Updated:** March 1, 2026  
 **Developer:** Kartik (NullVoider)
 
 ---
