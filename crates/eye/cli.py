@@ -51,47 +51,6 @@ def _parse_datetime(value: str) -> datetime:
         f"Cannot parse '{value}'. Use YYYY-MM-DD HH:MM:SS (or YYYY-MM-DD)."
     )
 
-def _install_binary(src: Path, dst: Path, os_name: str):
-    if os_name == 'win':
-        old_dst = dst.with_suffix('.old')
-        if old_dst.exists():
-            try:
-                old_dst.unlink()
-            except Exception:
-                pass
-
-        renamed = False
-        if dst.exists():
-            dst.rename(old_dst)
-            renamed = True
-
-        try:
-            shutil.copy2(str(src), str(dst))
-        except Exception:
-            if renamed and old_dst.exists():
-                old_dst.rename(dst)
-            raise
-
-        if renamed and old_dst.exists():
-            cmd = f'cmd /c ping 127.0.0.1 -n 3 > nul & del "{old_dst}"'
-            subprocess.Popen(
-                cmd, shell=True,
-                creationflags=subprocess.CREATE_NO_WINDOW
-            )
-    else:
-        tmp = dst.parent / (dst.name + '.new')
-        try:
-            shutil.copy2(str(src), str(tmp))
-            tmp.chmod(tmp.stat().st_mode | stat.S_IEXEC | stat.S_IXGRP | stat.S_IXOTH)
-            os.rename(str(tmp), str(dst))
-        except Exception:
-            if tmp.exists():
-                try:
-                    tmp.unlink()
-                except Exception:
-                    pass
-            raise
-
 # CLI root
 @click.group()
 @click.version_option(version=__version__, prog_name="Eye Vision Capture Tool")
@@ -611,14 +570,10 @@ def update(check_only):
             src = extracted_bin_dir / binary
             if src.exists():
                 dst = install_dir / binary
-                try:
-                    _install_binary(src, dst, os_name)
-                    click.echo(f"  ✓ Installed: {dst}")
-                except Exception as e:
-                    click.echo(
-                        click.style(f"  ✗ Failed to install {binary}: {e}", fg='red'),
-                        err=True,
-                    )
+                shutil.copy2(str(src), str(dst))
+                if os_name != 'win':
+                    dst.chmod(dst.stat().st_mode | stat.S_IEXEC | stat.S_IXGRP | stat.S_IXOTH)
+                click.echo(f"  ✓ Installed: {dst}")
 
         shutil.rmtree(temp_dir, ignore_errors=True)
         click.echo(click.style(f"\n[OK] Updated to v{latest_version}!", fg='green'))
@@ -664,7 +619,7 @@ def uninstall(yes, purge):
 
     python_package_info = None
     try:
-        from importlib.metadata import metadata, PackageNotFoundError
+        from importlib.metadata import packages_distributions, metadata, PackageNotFoundError
         try:
             meta = metadata('eye-capture')
             python_package_info = {
@@ -816,3 +771,9 @@ def uninstall(yes, purge):
         click.echo(click.style(f"✗ {len(failed)} item(s) could not be removed:", fg='red'))
         for path, reason in failed:
             click.echo(f"  - {path}: {reason}")
+
+def main():
+    cli()
+
+if __name__ == '__main__':
+    main()
