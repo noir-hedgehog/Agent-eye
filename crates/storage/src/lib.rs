@@ -57,8 +57,25 @@ impl MemoryStore {
         Ok(())
     }
 
-    // Retrieve the latest frame
+    // Retrieve the latest frame (by timestamp)
     pub async fn get_latest(&self) -> Result<Frame> {
+        let frames = self.frames.read().await;
+
+        if frames.is_empty() {
+            anyhow::bail!("no frames available");
+        }
+
+        // Find the frame with the latest timestamp
+        let latest_frame = frames
+            .iter()
+            .max_by_key(|f| f.timestamp)
+            .unwrap();
+
+        Ok(latest_frame.clone())
+    }
+
+    // Retrieve the latest frame (by buffer position - legacy behavior)
+    pub async fn get_latest_by_position(&self) -> Result<Frame> {
         let frames = self.frames.read().await;
         let current = self.current.read().await;
 

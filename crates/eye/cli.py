@@ -125,7 +125,10 @@ def agent():
 @click.option('--duration', type=int, help='Auto-stop after N seconds')
 @click.option('--max-frames', type=int, help='Auto-stop after N frames')
 @click.option('--notify/--no-notify', default=True, help='Show or hide desktop notifications')
-def start_agent(server, token, interval, format, quality, duration, max_frames, notify):
+@click.option('--grid', 'grid_size', type=int, default=0, help='Grid overlay size in pixels (0=disabled, 100=100px grid)')
+@click.option('--mouse/--no-mouse', default=False, help='Show mouse coordinates overlay')
+@click.option('--region', type=str, default=None, help='Capture region: x,y,width,height (e.g., "0,0,800,600")')
+def start_agent(server, token, interval, format, quality, duration, max_frames, notify, grid_size, mouse, region):
     """Start Python capture agent (compatible with Rust server)"""
 
     try:
@@ -144,6 +147,12 @@ def start_agent(server, token, interval, format, quality, duration, max_frames, 
         click.echo(f"   Duration: {duration}s (auto-stop)")
     if max_frames:
         click.echo(f"   Max frames: {max_frames} (auto-stop)")
+    if grid_size > 0:
+        click.echo(f"   Grid: {grid_size}px")
+    if mouse:
+        click.echo(f"   Mouse: enabled")
+    if region:
+        click.echo(f"   Region: {region}")
     click.echo(f"   Server: Rust-based Eye Server")
 
     try:
@@ -155,7 +164,10 @@ def start_agent(server, token, interval, format, quality, duration, max_frames, 
             quality=quality,
             duration=duration,
             max_frames=max_frames,
-            notify=notify
+            notify=notify,
+            grid_size=grid_size,
+            show_mouse=mouse,
+            region=region
         )
         bot.run()
     except KeyboardInterrupt:

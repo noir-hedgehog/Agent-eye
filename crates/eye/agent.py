@@ -12,6 +12,92 @@ from io import BytesIO
 from PIL import Image
 from typing import Optional
 from datetime import datetime, timedelta
+from PIL import ImageDraw, ImageFont
+
+# Enhanced capture functions (inline)
+def _get_mouse_position():
+    """Get current mouse cursor position."""
+    os_type = platform.system()
+    try:
+        if os_type == "Darwin":
+            # Use Quartz for reliable mouse position
+            import Quartz
+            pos = Quartz.NSEvent.mouseLocation()
+            height = Quartz.CGDisplayPixelsHigh(Quartz.CGMainDisplayID())
+            x = int(pos.x)
+            y = int(height - pos.y)
+            return (x, y)
+        elif os_type == "Linux":
+            result = subprocess.run(["xdotool", "getmouselocation"], capture_output=True, text=True, timeout=2)
+            if result.returncode == 0:
+                parts = result.stdout.strip().split()
+                x = int(parts[0].split(":")[1])
+                y = int(parts[1].split(":")[1])
+                return (x, y)
+        elif os_type == "Windows":
+            import ctypes
+            class POINT(ctypes.Structure):
+                _fields_ = [("x", ctypes.c_long), ("y", ctypes.c_long)]
+            pt = POINT()
+            ctypes.windll.user32.GetCursorPos(ctypes.byref(pt))
+            return (pt.x, pt.y)
+    except Exception as e:
+        print(f"[WARN] Get mouse position failed: {e}")
+    return None
+
+def _add_grid_overlay(img, grid_size=100, color=(128, 128, 128)):
+    """Add grid overlay to image."""
+    draw = ImageDraw.Draw(img)
+    width, height = img.size
+    for x in range(0, width, grid_size):
+        draw.line([(x, 0), (x, height)], color, 1)
+    for y in range(0, height, grid_size):
+        draw.line([(0, y), (width, y)], color, 1)
+    return img
+
+def _add_mouse_coordinates(img, mouse_pos=None, show_label=True, show_crosshair=True):
+    """Add mouse position indicator to image."""
+    if mouse_pos is None:
+        mouse_pos = _get_mouse_position()
+    if mouse_pos is None:
+        return img
+    
+    x, y = mouse_pos
+    draw = ImageDraw.Draw(img)
+    width, height = img.size
+    x = max(0, min(x, width - 1))
+    y = max(0, min(y, height - 1))
+    
+    if show_crosshair:
+        crosshair_color = (255, 0, 0)
+        draw.line([(x - 15, y), (x + 15, y)], crosshair_color, 2)
+        draw.line([(x, y - 15), (x, y + 15)], crosshair_color, 2)
+        draw.ellipse([x-8, y-8, x+8, y+8], outline=crosshair_color, width=2)
+    
+    if show_label:
+        label_text = f"({x}, {y})"
+        try:
+            font = ImageFont.truetype("/System/Library/Fonts/Helvetica.ttc", 16)
+        except:
+            font = ImageFont.load_default()
+        
+        bbox = draw.textbbox((0, 0), label_text, font=font)
+        text_width = bbox[2] - bbox[0]
+        text_height = bbox[3] - bbox[1]
+        
+        label_x, label_y = x + 20, y - 30
+        if label_x + text_width + 10 > width:
+            label_x = x - text_width - 30
+        if label_y < 0:
+            label_y = y + 20
+        
+        padding = 6
+        draw.rectangle([label_x - padding, label_y - padding, label_x + text_width + padding, label_y + text_height + padding], fill=(0, 0, 0, 200))
+        draw.text((label_x, label_y), label_text, fill=(255, 255, 0), font=font)
+    
+    return img
+
+ENHANCED_CAPTURE_AVAILABLE = True
 
 # Check for MSS availability
 try:
@@ -26,6 +112,7 @@ class Agent:
     """
     Universal Capture Agent (Linux, Windows, macOS).
     Now with: format control, quality settings, duration/frame limits
+    Enhanced: grid overlay, mouse coordinates, window/region capture
     """
     
     # Initialization
@@ -38,7 +125,11 @@ class Agent:
         quality: int = 95,
         duration: Optional[int] = None,
         max_frames: Optional[int] = None,
-        notify: bool = True
+        notify: bool = True,
+        # Enhanced capture options
+        grid_size: int = 0,  # 0 = disabled, >0 = grid cell size
+        show_mouse: bool = False,  # Show mouse coordinates overlay
+        region: Optional[str] = None,  # "x,y,width,height" or None for fullscreen
     ):
         self.interval = interval
         self.format = format.lower()
@@ -46,6 +137,19 @@ class Agent:
         self.duration = duration
         self.max_frames = max_frames
         self.notify = notify
+        
+        # Enhanced options
+        self.grid_size = grid_size
+        self.show_mouse = show_mouse
+        self.region = region
+        if region:
+            parts = region.split(",")
+            if len(parts) == 4:
+                self.region_rect = (int(parts[0]), int(parts[1]), int(parts[2]), int(parts[3]))
+            else:
+                self.region_rect = None
+        else:
+            self.region_rect = None
         
         self.frame_id = 0
         self.retry_delay = 1
@@ -262,14 +366,86 @@ class Agent:
     # Screen Capture
     def capture_screen(self) -> bytes:
         """Capture and encode in configured format"""
-        if self.capture_method == "mss":
-            return self._capture_mss()
-        elif self.capture_method == "linux_system":
-            return self._capture_linux_fallback()
-        elif self.capture_method == "macos_screencapture":
-            return self._capture_macos()
+        # Handle region capture
+        if self.region_rect:
+            x, y, w, h = self.region_rect
+            img = self._capture_region(x, y, w, h)
+            if img is None:
+                return self._generate_test_pattern()
         else:
-            return self._generate_test_pattern()
+            # Normal capture
+            if self.capture_method == "mss":
+                img_bytes = self._capture_mss()
+            elif self.capture_method == "linux_system":
+                img_bytes = self._capture_linux_fallback()
+            elif self.capture_method == "macos_screencapture":
+                img_bytes = self._capture_macos()
+            else:
+                img_bytes = self._generate_test_pattern()
+            
+            # Convert bytes to Image
+            img = Image.open(BytesIO(img_bytes))
+        
+        # Apply enhanced overlays
+        img = self._apply_enhancements(img)
+        
+        # Encode to configured format
+        return self._encode_image(img)
+    
+    def _capture_region(self, x: int, y: int, width: int, height: int) -> Optional[Image.Image]:
+        """Capture a specific region of the screen"""
+        os_type = platform.system()
+        temp_file = tempfile.mktemp(suffix=".png")
+        
+        try:
+            if os_type == "Darwin":
+                subprocess.run(
+                    ["/usr/sbin/screencapture", "-R", f"{x},{y},{width},{height}", "-x", temp_file],
+                    check=True, timeout=5
+                )
+            elif os_type == "Linux":
+                subprocess.run(
+                    ["import", "-window", "root", "-crop", f"{width}x{height}+{x}+{y}", temp_file],
+                    check=True, timeout=5
+                )
+            else:
+                return None
+            
+            img = Image.open(temp_file)
+            os.remove(temp_file)
+            return img
+        except Exception as e:
+            print(f"[WARN] Region capture failed: {e}")
+            if os.path.exists(temp_file):
+                os.remove(temp_file)
+            return None
+    
+    def _apply_enhancements(self, img: Image.Image) -> Image.Image:
+        """Apply grid and mouse coordinate overlays"""
+        # Get mouse position (relative to captured region if using region capture)
+        mouse_pos = None
+        if self.show_mouse:
+            screen_pos = _get_mouse_position()
+            if screen_pos and self.region_rect:
+                # Convert screen coordinates to region-relative coordinates
+                reg_x, reg_y, reg_w, reg_h = self.region_rect
+                rel_x = screen_pos[0] - reg_x
+                rel_y = screen_pos[1] - reg_y
+                # Only show if within region bounds
+                if 0 <= rel_x < reg_w and 0 <= rel_y < reg_h:
+                    mouse_pos = (rel_x, rel_y)
+            elif screen_pos:
+                mouse_pos = screen_pos
+        
+        # Add grid overlay
+        if self.grid_size > 0:
+            img = _add_grid_overlay(img, grid_size=self.grid_size)
+        
+        # Add mouse coordinates (relative to captured region)
+        if self.show_mouse and mouse_pos:
+            img = _add_mouse_coordinates(img, mouse_pos=mouse_pos)
+        
+        return img
 
     # Encode Image
     def _encode_image(self, img: Image.Image) -> bytes:
@@ -361,7 +537,7 @@ class Agent:
         """macOS: Uses native screencapture tool"""
         temp_file = tempfile.mktemp(suffix=".png")
         try:
-            subprocess.run(["screencapture", "-x", "-C", temp_file], check=True, timeout=5)
+            subprocess.run(["/usr/sbin/screencapture", "-x", "-C", temp_file], check=True, timeout=5)
             
             # Load and re-encode in configured format
             img = Image.open(temp_file)
