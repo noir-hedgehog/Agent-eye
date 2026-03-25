@@ -1,4 +1,7 @@
 // crates/agent/src/main.rs
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Derivative of https://github.com/nullvoider07/the-eyes — fork: https://github.com/noir-hedgehog/Agent-eye
+
 use anyhow::{Context, Result};
 use capture::{Config as CaptureConfig, Engine};
 use image::ImageFormat;

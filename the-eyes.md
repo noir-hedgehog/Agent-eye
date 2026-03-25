@@ -1,8 +1,11 @@
 # The Eye - Vision Capture Tool
 
+> **Derivative work notice.** This document describes **The Eye** and is maintained in the **[Agent-eye](https://github.com/noir-hedgehog/Agent-eye)** fork. The upstream project is **[the-eyes](https://github.com/nullvoider07/the-eyes)** by Kartik (NullVoider), licensed under **GPLv3**. This fork’s documentation and code are distributed under the **same license**; see the repository [`LICENSE`](LICENSE).
+
 **Version:** 0.2.2  
 **Last Updated:** March 2026  
-**Developer:** Kartik (NullVoider)
+**Upstream author:** Kartik (NullVoider) — [nullvoider07/the-eyes](https://github.com/nullvoider07/the-eyes)  
+**This fork:** [noir-hedgehog/Agent-eye](https://github.com/noir-hedgehog/Agent-eye)
 
 ---
 
@@ -1265,8 +1268,8 @@ setup_logging(level="DEBUG", log_file=Path("/tmp/eye.log"))
 
 ## About This Project
 
-The Eye - Vision Capture Tool was built from scratch through iterative testing and refinement. Every command, every feature, and every line of code was crafted to solve real automation challenges for Computer Use Agents.
+The upstream **The Eye** vision capture tool was developed by Kartik (NullVoider) for Computer Use Agent workflows. **[Agent-eye](https://github.com/noir-hedgehog/Agent-eye)** is a fork that adds automation-oriented features (e.g. grid overlay, region capture, OpenClaw-oriented integration) while remaining under GPLv3.
 
-If you find this tool useful, encounter bugs, or have feature requests, feel free to reach out directly via [X (formerly Twitter)](https://x.com/nullvoider07).
+For upstream issues and the original roadmap, use [nullvoider07/the-eyes](https://github.com/nullvoider07/the-eyes). For this fork, open issues on [Agent-eye](https://github.com/noir-hedgehog/Agent-eye/issues).
 
-**The Eye** - Vision capture for the AI age 👁️
+**The Eye** — vision capture for the AI age (upstream by Kartik; fork maintained separately under the same license).

@@ -1,35 +1,31 @@
-# Agent-Eye 🎯
+# Agent-Eye
 
-Enhanced screen capture and streaming service for AI agents.
+Enhanced screen capture and streaming for AI agents. This repository is a **fork** of **[the-eyes](https://github.com/nullvoider07/the-eyes)** by Kartik (NullVoider / [nullvoider07](https://github.com/nullvoider07)), extended for **OpenClaw** and related workflows (extra capture options, automation-oriented UX, and local integration needs).
+
+The upstream project is licensed under the **GNU General Public License v3.0**. This fork is distributed **only** under **GPL-3.0-or-later** as well; see the [`LICENSE`](LICENSE) file in this repository.
 
 ## Features
 
-- **Screenshot Capture**: Capture full screen or specific regions
-- **100px Grid Overlay**: Visual reference grid for coordinate-based automation
-- **Mouse Coordinates**: Real-time mouse position overlay with crosshair
-- **Region Capture**: Capture specific screen regions (e.g., `--region 0,0,1200,900`)
-- **Web Dashboard**: View captured frames via web interface
-- **Multiple Format Support**: PNG, JPEG output
+- **Screenshot capture**: Full screen or specific regions
+- **100px grid overlay**: Visual grid for coordinate-based automation
+- **Mouse coordinates**: Real-time cursor overlay with crosshair
+- **Region capture**: e.g. `--region 0,0,1200,900`
+- **Web dashboard**: View captured frames in the browser
+- **Multiple formats**: PNG, JPEG, and others as supported by the agent
 
 ## Quick Start
 
 ### Server
 
 ```bash
-# Build from source
 cargo build --release -p eye-server
-
-# Run server
 ./target/release/eye-server --port 8080
 ```
 
 ### Agent (Python)
 
 ```bash
-# Install dependencies
 pip install -r crates/eye/requirements.txt
-
-# Run agent
 cd crates/eye
 python -c "
 from agent import Agent
@@ -40,7 +36,7 @@ agent.run()
 
 ## Configuration
 
-### Server Options
+### Server options
 
 | Option | Description | Default |
 |--------|-------------|---------|
@@ -48,39 +44,41 @@ agent.run()
 | `--region` | Capture region (x,y,w,h) | Fullscreen |
 | `--max-frames` | Frame buffer size | 100 |
 
-### Agent Options
+### Agent options
 
 ```python
 agent = Agent(
     server_url='http://localhost:8080',
-    interval=1.5,           # Capture interval in seconds
-    grid_size=100,          # Grid cell size in pixels
-    show_mouse=True,        # Show mouse coordinates
-    region='0,0,1200,900'   # Capture region
+    interval=1.5,
+    grid_size=100,
+    show_mouse=True,
+    region='0,0,1200,900',
 )
 ```
 
-## API Endpoints
+## API endpoints
 
 | Endpoint | Description |
 |----------|-------------|
-| `GET /snapshot.png` | Get latest frame as PNG |
-| `GET /frames` | List all frames in buffer |
-| `GET /frames/:id` | Get specific frame by ID |
-| `GET /health` | Server health status |
+| `GET /snapshot.png` | Latest frame |
+| `GET /frames` | Frames in buffer |
+| `GET /frames/:id` | Frame by id |
+| `GET /health` | Health status |
 
-## Acknowledgments
+## Upstream and this fork
 
-This project is a fork of [The-Eye](https://github.com/noir-hedgehog/the-eye), originally created by [noir-hedgehog](https://github.com/noir-hedgehog).
+- **Upstream repository**: [nullvoider07/the-eyes](https://github.com/nullvoider07/the-eyes) (GPLv3).
+- **This fork**: [noir-hedgehog/Agent-eye](https://github.com/noir-hedgehog/Agent-eye) — changes here build on upstream; see git history for concrete edits.
 
-### Enhancements in This Fork
+### Enhancements in this fork (examples)
 
-- Fixed frame buffer management (timestamp-based latest frame selection)
-- Added region capture support with proper coordinate handling
-- Enhanced grid overlay with 100px cells
-- Mouse position tracking with crosshair visualization
-- Optimized for UI automation workflows
+- Frame buffer handling improvements (timestamp-based latest frame selection)
+- Region capture with coordinate handling
+- Grid overlay (e.g. 100px cells) and mouse overlay for UI automation
+- Orientation toward OpenClaw / agent automation use cases
+
+Install scripts and CLI helpers may still reference upstream release URLs where noted in code; binaries obtained from upstream remain subject to GPLv3.
 
 ## License
 
-MIT
+GNU General Public License v3.0 or later — see [`LICENSE`](LICENSE).

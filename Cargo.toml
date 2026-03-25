@@ -12,7 +12,12 @@ members = [
 [workspace.package]
 version = "0.1.0"
 edition = "2024"
-authors = ["Kartik (NullVoider)"]
+license = "GPL-3.0-or-later"
+authors = [
+    "Kartik (NullVoider) (upstream: https://github.com/nullvoider07/the-eyes)",
+    "Agent-eye fork (https://github.com/noir-hedgehog/Agent-eye)",
+]
+repository = "https://github.com/noir-hedgehog/Agent-eye"
 
 [workspace.dependencies]
 # Async runtime

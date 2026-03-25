@@ -1,5 +1,7 @@
 #!/bin/bash
 # Eye Vision Capture Tool - Installation Script
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Derivative of https://github.com/nullvoider07/the-eyes — fork: https://github.com/noir-hedgehog/Agent-eye
 
 set -e
 

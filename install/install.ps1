@@ -1,5 +1,7 @@
 # Eye Vision Capture Tool - Windows Installation Script
 # Based on actuation-control pattern, customized for Eye's dual-binary structure
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Derivative of https://github.com/nullvoider07/the-eyes — fork: https://github.com/noir-hedgehog/Agent-eye
 
 $ErrorActionPreference = "Stop"
 

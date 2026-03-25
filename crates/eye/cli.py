@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Derivative of https://github.com/nullvoider07/the-eyes — see fork: https://github.com/noir-hedgehog/Agent-eye
+
 import click
 import yaml
 import os
