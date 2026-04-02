@@ -221,6 +221,7 @@ async fn upload_handler(
     let mut frame_id = 0i64;
     // Default to png; overwritten if the agent sends a "format" field
     let mut format = "png".to_string();
+    let mut vision_meta_raw: Option<String> = None;
 
     while let Some(field) = multipart
         .next_field()
@@ -260,6 +261,20 @@ async fn upload_handler(
                     text.to_lowercase()
                 };
             }
+            "vision_meta" => {
+                let text = field
+                    .text()
+                    .await
+                    .map_err(|e| (StatusCode::BAD_REQUEST, e.to_string()))?;
+                // Must be JSON (object) — used by vision / LLM agents
+                if serde_json::from_str::<serde_json::Value>(&text).is_err() {
+                    return Err((
+                        StatusCode::BAD_REQUEST,
+                        "vision_meta must be valid JSON".to_string(),
+                    ));
+                }
+                vision_meta_raw = Some(text);
+            }
             _ => {}
         }
     }
@@ -271,6 +286,9 @@ async fn upload_handler(
     let mut metadata = HashMap::new();
     metadata.insert("content-type".to_string(), format!("image/{}", format));
     metadata.insert("format".to_string(), format.clone());
+    if let Some(vm) = vision_meta_raw {
+        metadata.insert("vision_meta".to_string(), vm);
+    }
 
     let frame = Frame {
         id: frame_id,
@@ -341,14 +359,25 @@ async fn frames_list_handler(State(state): State<AppState>) -> Json<serde_json::
                 .cloned()
                 .unwrap_or_else(|| "png".to_string());
 
-            json!({
+            let vision = f
+                .metadata
+                .get("vision_meta")
+                .and_then(|s| serde_json::from_str::<serde_json::Value>(s).ok());
+
+            let mut row = json!({
                 "id":             f.id,
                 "timestamp":      f.timestamp.to_rfc3339(),
                 "timestamp_unix": f.timestamp.timestamp(),
                 "size_bytes":     f.data.len(),
                 "size_kb":        (f.data.len() as f64 / 1024.0 * 10.0).round() / 10.0,
                 "format":         format,
-            })
+            });
+            if let Some(v) = vision {
+                row.as_object_mut()
+                    .expect("row is object")
+                    .insert("vision".to_string(), v);
+            }
+            row
         })
         .collect();
 

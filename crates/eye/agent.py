@@ -1,3 +1,4 @@
+import json
 import time
 import requests
 import os
@@ -10,7 +11,12 @@ import platform
 import signal
 from io import BytesIO
 from PIL import Image
-from typing import Optional
+from typing import Any, Dict, Optional
+
+from .utils.qwen_vision import (
+    QWEN35_RECOMMENDED_MAX_LONGEST_EDGE,
+    merge_vision_meta,
+)
 from datetime import datetime, timedelta
 from PIL import ImageDraw, ImageFont
 
@@ -97,6 +103,64 @@ def _add_mouse_coordinates(img, mouse_pos=None, show_label=True, show_crosshair=
     
     return img
 
+
+def _get_active_window_title() -> Optional[str]:
+    """Best-effort foreground window / app title (helps LLM agents with UI context)."""
+    os_type = platform.system()
+    try:
+        if os_type == "Darwin":
+            script = (
+                'tell application "System Events" to get name of first application process '
+                "whose frontmost is true"
+            )
+            r = subprocess.run(
+                ["osascript", "-e", script],
+                capture_output=True,
+                text=True,
+                timeout=0.85,
+            )
+            if r.returncode == 0 and r.stdout.strip():
+                return r.stdout.strip()[:240]
+        elif os_type == "Windows":
+            import ctypes
+
+            u32 = ctypes.windll.user32
+            hwnd = u32.GetForegroundWindow()
+            if not hwnd:
+                return None
+            ln = u32.GetWindowTextLengthW(hwnd)
+            if ln <= 0:
+                return None
+            buf = ctypes.create_unicode_buffer(ln + 1)
+            u32.GetWindowTextW(hwnd, buf, ln + 1)
+            return (buf.value or "")[:240] or None
+        elif os_type == "Linux":
+            r = subprocess.run(
+                ["xdotool", "getactivewindow", "getwindowname"],
+                capture_output=True,
+                text=True,
+                timeout=0.85,
+            )
+            if r.returncode == 0 and r.stdout.strip():
+                return r.stdout.strip()[:240]
+    except Exception:
+        pass
+    return None
+
+
+def _resize_max_dimension(img: Image.Image, max_dim: int) -> Image.Image:
+    """Scale down so the longest edge is at most max_dim (aspect preserved)."""
+    max_dim = max(32, int(max_dim))
+    w, h = img.size
+    longest = max(w, h)
+    if longest <= max_dim:
+        return img
+    ratio = max_dim / float(longest)
+    nw = max(1, int(w * ratio))
+    nh = max(1, int(h * ratio))
+    return img.resize((nw, nh), Image.Resampling.LANCZOS)
+
+
 ENHANCED_CAPTURE_AVAILABLE = True
 
 # Check for MSS availability
@@ -130,6 +194,12 @@ class Agent:
         grid_size: int = 0,  # 0 = disabled, >0 = grid cell size
         show_mouse: bool = False,  # Show mouse coordinates overlay
         region: Optional[str] = None,  # "x,y,width,height" or None for fullscreen
+        # Vision / agent integration
+        monitor_index: int = 1,  # mss monitor index: 0=all virtual, 1=primary, …
+        max_dimension: Optional[int] = None,  # scale down longest edge (e.g. 1280 for vision APIs)
+        vision_context: bool = True,  # attach JSON vision_meta to each upload
+        window_title: bool = True,  # include active window title when vision_context (best-effort)
+        vision_preset: Optional[str] = None,  # e.g. "qwen35-plus" — align capture + meta for Qwen/DashScope
     ):
         self.interval = interval
         self.format = format.lower()
@@ -150,6 +220,23 @@ class Agent:
                 self.region_rect = None
         else:
             self.region_rect = None
+
+        self.monitor_index = max(0, int(monitor_index))
+        vp = (vision_preset or "").strip().lower()
+        self.vision_preset = vp if vp and vp != "none" else None
+        # Qwen3.5 / DashScope: default max_pixels 2_621_440 → ~1619px longest edge if unset
+        if max_dimension is None and self.vision_preset in (
+            "qwen35-plus",
+            "qwen3.5-plus",
+            "dashscope-qwen35",
+        ):
+            self.max_dimension = QWEN35_RECOMMENDED_MAX_LONGEST_EDGE
+        else:
+            self.max_dimension = max_dimension
+        self.vision_context = vision_context
+        self.window_title = window_title
+        self._prev_frame_pix: Optional[list] = None
+        self._pending_vision: Optional[Dict[str, Any]] = None
         
         self.frame_id = 0
         self.retry_delay = 1
@@ -186,6 +273,11 @@ class Agent:
             print(f"[INFO] Duration: {self.duration}s (auto-stop)")
         if self.max_frames:
             print(f"[INFO] Max frames: {self.max_frames} (auto-stop)")
+        if not self.region_rect:
+            print(f"[INFO] Monitor index (mss): {self.monitor_index}")
+        if self.max_dimension:
+            print(f"[INFO] Max dimension (longest edge): {self.max_dimension}px")
+        print(f"[INFO] Vision meta JSON: {'on' if self.vision_context else 'off'}")
         
         # 2. Detect Capture Method
         self.capture_method = self._detect_capture_method()
@@ -366,6 +458,9 @@ class Agent:
     # Screen Capture
     def capture_screen(self) -> bytes:
         """Capture and encode in configured format"""
+        t0 = time.time()
+        self._pending_vision = None
+
         # Handle region capture
         if self.region_rect:
             x, y, w, h = self.region_rect
@@ -375,20 +470,29 @@ class Agent:
         else:
             # Normal capture
             if self.capture_method == "mss":
-                img_bytes = self._capture_mss()
+                img = self._capture_mss_image()
             elif self.capture_method == "linux_system":
                 img_bytes = self._capture_linux_fallback()
+                img = Image.open(BytesIO(img_bytes))
             elif self.capture_method == "macos_screencapture":
                 img_bytes = self._capture_macos()
+                img = Image.open(BytesIO(img_bytes))
             else:
                 img_bytes = self._generate_test_pattern()
-            
-            # Convert bytes to Image
-            img = Image.open(BytesIO(img_bytes))
+                img = Image.open(BytesIO(img_bytes))
         
         # Apply enhanced overlays
         img = self._apply_enhancements(img)
-        
+
+        if self.max_dimension:
+            img = _resize_max_dimension(img, self.max_dimension)
+
+        elapsed = time.time() - t0
+        change_score: Optional[float] = None
+        if self.vision_context:
+            change_score = self._compute_frame_change_score(img)
+            self._pending_vision = self._build_vision_context(img, elapsed, change_score)
+
         # Encode to configured format
         return self._encode_image(img)
     
@@ -447,6 +551,52 @@ class Agent:
         
         return img
 
+    def _compute_frame_change_score(self, img: Image.Image) -> Optional[float]:
+        """
+        Normalized 0..1 score vs previous frame (64×64 luminance).
+        First frame returns None.
+        """
+        small = img.convert("L").resize((64, 64), Image.Resampling.LANCZOS)
+        pix = list(small.getdata())
+        if self._prev_frame_pix is None:
+            self._prev_frame_pix = pix
+            return None
+        n = len(pix)
+        total = sum(abs(a - b) for a, b in zip(pix, self._prev_frame_pix))
+        self._prev_frame_pix = pix
+        return round((total / float(n * 255)), 4)
+
+    def _build_vision_context(
+        self,
+        img: Image.Image,
+        capture_seconds: float,
+        change_score: Optional[float],
+    ) -> Dict[str, Any]:
+        w, h = img.size
+        ctx: Dict[str, Any] = {
+            "width": w,
+            "height": h,
+            "platform": self.os_type,
+            "capture_latency_ms": round(capture_seconds * 1000.0, 2),
+        }
+        if not self.region_rect:
+            ctx["monitor_index"] = self.monitor_index
+        else:
+            rx, ry, rw, rh = self.region_rect
+            ctx["region"] = {"x": rx, "y": ry, "w": rw, "h": rh}
+        if self.max_dimension:
+            ctx["max_dimension_applied"] = self.max_dimension
+        if change_score is not None:
+            ctx["frame_change_score"] = change_score
+        mp = _get_mouse_position()
+        if mp:
+            ctx["mouse_screen"] = {"x": mp[0], "y": mp[1]}
+        if self.window_title:
+            title = _get_active_window_title()
+            if title:
+                ctx["active_window_title"] = title
+        return merge_vision_meta(ctx, self.vision_preset)
+
     # Encode Image
     def _encode_image(self, img: Image.Image) -> bytes:
         """Encode image in configured format and quality"""
@@ -470,22 +620,23 @@ class Agent:
         
         return buffer.getvalue()
 
-    # MSS Capture
-    def _capture_mss(self) -> bytes:
+    # MSS Capture → PIL (monitor_index: 0 = all monitors virtual, 1+ = specific display)
+    def _capture_mss_image(self) -> Image.Image:
         try:
             from mss import mss
+
             with mss() as sct:
-                monitor = sct.monitors[1]
+                n = len(sct.monitors)
+                idx = min(self.monitor_index, n - 1)
+                monitor = sct.monitors[idx]
                 screenshot = sct.grab(monitor)
-                img = Image.frombytes("RGB", screenshot.size, screenshot.rgb)
-                return self._encode_image(img)
+                return Image.frombytes("RGB", screenshot.size, screenshot.rgb)
         except Exception:
-            # Fallback to OS specific tools if MSS crashes
             if self.os_type == "Linux":
-                return self._capture_linux_fallback()
+                return Image.open(BytesIO(self._capture_linux_fallback()))
             elif self.os_type == "Darwin":
-                return self._capture_macos()
-            return self._generate_test_pattern()
+                return Image.open(BytesIO(self._capture_macos()))
+            return Image.open(BytesIO(self._generate_test_pattern()))
     
     # Linux Fallback Capture
     def _capture_linux_fallback(self) -> bytes:
@@ -563,8 +714,10 @@ class Agent:
             data = {
                 'frame_id': str(self.frame_id),
                 'timestamp': str(int(time.time())),
-                'format': self.format
+                'format': self.format,
             }
+            if self.vision_context and self._pending_vision:
+                data['vision_meta'] = json.dumps(self._pending_vision, ensure_ascii=False)
             
             response = requests.post(
                 self.upload_endpoint,

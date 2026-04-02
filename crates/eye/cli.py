@@ -131,7 +131,17 @@ def agent():
 @click.option('--grid', 'grid_size', type=int, default=0, help='Grid overlay size in pixels (0=disabled, 100=100px grid)')
 @click.option('--mouse/--no-mouse', default=False, help='Show mouse coordinates overlay')
 @click.option('--region', type=str, default=None, help='Capture region: x,y,width,height (e.g., "0,0,800,600")')
-def start_agent(server, token, interval, format, quality, duration, max_frames, notify, grid_size, mouse, region):
+@click.option('--monitor', type=int, default=1, help='mss monitor index: 0=all displays, 1=primary (default), 2+=other')
+@click.option('--max-dimension', type=int, default=None, help='Scale image so longest edge is at most N pixels (e.g. 1280 for vision APIs)')
+@click.option('--vision-meta/--no-vision-meta', default=True, help='Send JSON vision context (size, mouse, window title, change score) with each frame')
+@click.option('--window-title/--no-window-title', default=True, help='Include active window title in vision_meta (best-effort)')
+@click.option(
+    '--vision-preset',
+    type=click.Choice(['none', 'qwen35-plus'], case_sensitive=False),
+    default='none',
+    help='Align capture + vision_meta for a target stack (qwen35-plus: DashScope Qwen3.5 VL defaults, ~1619px longest edge)',
+)
+def start_agent(server, token, interval, format, quality, duration, max_frames, notify, grid_size, mouse, region, monitor, max_dimension, vision_meta, window_title, vision_preset):
     """Start Python capture agent (compatible with Rust server)"""
 
     try:
@@ -156,6 +166,15 @@ def start_agent(server, token, interval, format, quality, duration, max_frames, 
         click.echo(f"   Mouse: enabled")
     if region:
         click.echo(f"   Region: {region}")
+    if not region:
+        click.echo(f"   Monitor: {monitor} (mss index)")
+    if max_dimension:
+        click.echo(f"   Max dimension: {max_dimension}px (longest edge)")
+    click.echo(f"   Vision meta: {'on' if vision_meta else 'off'}")
+    if vision_meta:
+        click.echo(f"   Window title in meta: {'on' if window_title else 'off'}")
+    if vision_preset and vision_preset.lower() != 'none':
+        click.echo(f"   Vision preset: {vision_preset}")
     click.echo(f"   Server: Rust-based Eye Server")
 
     try:
@@ -170,7 +189,12 @@ def start_agent(server, token, interval, format, quality, duration, max_frames, 
             notify=notify,
             grid_size=grid_size,
             show_mouse=mouse,
-            region=region
+            region=region,
+            monitor_index=monitor,
+            max_dimension=max_dimension,
+            vision_context=vision_meta,
+            window_title=window_title,
+            vision_preset=None if not vision_preset or vision_preset.lower() == 'none' else vision_preset,
         )
         bot.run()
     except KeyboardInterrupt:
